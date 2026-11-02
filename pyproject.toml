@@ -8,7 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "eodozzy" }]
 keywords = ["mcp", "icloud", "imap", "caldav", "model-context-protocol"]
 dependencies = [
-    "mcp[cli]",
+    "mcp[cli]>=1.10,<2",  # 2.x renamed FastMCP to MCPServer; port before lifting
     "imapclient",
     "caldav",
     "vobject",

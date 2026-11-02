@@ -13,6 +13,7 @@ class _FakeSMTP:
     def __init__(self, host, port, timeout=None):
         self.host, self.port = host, port
         self.started_tls = False
+        self.tls_context = None
         self.logged_in = None
         self.sent = None
         _FakeSMTP.last = self
@@ -23,8 +24,9 @@ class _FakeSMTP:
     def __exit__(self, *exc):
         return False
 
-    def starttls(self):
+    def starttls(self, context=None):
         self.started_tls = True
+        self.tls_context = context
 
     def login(self, user, password):
         self.logged_in = (user, password)
@@ -61,6 +63,19 @@ def test_send_message_builds_and_sends(monkeypatch):
     assert sent.sent["Subject"] == "Hi"
     assert sent.sent.get_content().strip() == "Hello there."
     assert result == "Sent to you@example.com."
+
+
+def test_send_message_verifies_tls_certificate(monkeypatch):
+    import ssl
+
+    monkeypatch.setattr(writes.smtplib, "SMTP", _FakeSMTP)
+    monkeypatch.setattr(writes, "get_password", lambda svc, user: "app-pw")
+
+    writes.send_message(_settings(), "you@example.com", "Hi", "Body")
+    ctx = _FakeSMTP.last.tls_context
+    assert ctx is not None
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
 
 
 def test_send_message_auth_error_is_wrapped(monkeypatch):

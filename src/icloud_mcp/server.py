@@ -35,6 +35,22 @@ async def _run_blocking(fn, *args):
     )
 
 
+async def _run_write(fn, *args) -> str:
+    """Run a mutating op. On timeout, report that it may still finish.
+
+    wait_for stops waiting but can't stop the worker thread, so a timed-out send or
+    create may still go through. A plain error would invite a retry and a duplicate.
+    """
+    try:
+        return await _run_blocking(fn, *args)
+    except TimeoutError:
+        return (
+            f"Timed out after {_CALL_TIMEOUT}s, but the action may still complete. "
+            "Do not retry: check Sent mail, the calendar, or contacts first to see "
+            "whether it went through."
+        )
+
+
 @dataclass
 class AppContext:
     settings: Settings
@@ -186,7 +202,7 @@ async def send_mail(
     summary = f"Send email to {to}" + (f" (cc {cc})" if cc else "") + f" — “{subject}”?"
     if not await _confirmed(ctx, app, summary):
         return "Cancelled — email not sent."
-    return await _run_blocking(write_ops.send_message, app.settings, to, subject, body, cc)
+    return await _run_write(write_ops.send_message, app.settings, to, subject, body, cc)
 
 
 @mcp.tool()
@@ -206,7 +222,7 @@ async def create_event(
     where = f" at {location}" if location else ""
     if not await _confirmed(ctx, app, f"Create event “{title}” from {start} to {end}{where}?"):
         return "Cancelled — event not created."
-    return await _run_blocking(
+    return await _run_write(
         write_ops.create_event, app.calendar, title, start, end, calendar, location
     )
 
@@ -230,7 +246,7 @@ async def update_event(
     ) or "(no fields given)"
     if not await _confirmed(ctx, app, f"Update event {uid}: {changes}?"):
         return "Cancelled — event not updated."
-    return await _run_blocking(
+    return await _run_write(
         write_ops.update_event, app.calendar, uid, title, start, end, location
     )
 
@@ -241,7 +257,7 @@ async def delete_event(ctx: Context, uid: str) -> str:
     app = _ctx(ctx)
     if not await _confirmed(ctx, app, f"Permanently delete event {uid}?"):
         return "Cancelled — event not deleted."
-    return await _run_blocking(write_ops.delete_event, app.calendar, uid)
+    return await _run_write(write_ops.delete_event, app.calendar, uid)
 
 
 @mcp.tool()
@@ -260,7 +276,7 @@ async def reply_mail(
     )
     if result.action != "accept":
         return "Cancelled — reply not sent."
-    return await _run_blocking(
+    return await _run_write(
         write_ops.reply_message, app.settings, reply_ctx, body, reply_all
     )
 
@@ -280,7 +296,7 @@ async def forward_mail(
     )
     if result.action != "accept":
         return "Cancelled — message not forwarded."
-    return await _run_blocking(write_ops.forward_message, app.settings, fwd_ctx, to, body)
+    return await _run_write(write_ops.forward_message, app.settings, fwd_ctx, to, body)
 
 
 @mcp.tool()
@@ -295,7 +311,7 @@ async def create_contact(
     app = _ctx(ctx)
     if not await _confirmed(ctx, app, f"Create contact “{full_name}”?"):
         return "Cancelled — contact not created."
-    return await _run_blocking(
+    return await _run_write(
         write_ops.create_contact, app.contacts, full_name, emails, phones, org
     )
 
@@ -316,7 +332,7 @@ async def update_contact(
     app = _ctx(ctx)
     if not await _confirmed(ctx, app, f"Update contact {uid}?"):
         return "Cancelled — contact not updated."
-    return await _run_blocking(
+    return await _run_write(
         write_ops.update_contact, app.contacts, uid, full_name, emails, phones, org
     )
 
@@ -327,7 +343,7 @@ async def delete_contact(ctx: Context, uid: str) -> str:
     app = _ctx(ctx)
     if not await _confirmed(ctx, app, f"Permanently delete contact {uid}?"):
         return "Cancelled — contact not deleted."
-    return await _run_blocking(write_ops.delete_contact, app.contacts, uid)
+    return await _run_write(write_ops.delete_contact, app.contacts, uid)
 
 
 # --------------------------------------------------------------------------

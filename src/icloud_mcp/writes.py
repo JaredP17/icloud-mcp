@@ -9,6 +9,7 @@ confirmation in ``server.py`` before reaching here.
 from __future__ import annotations
 
 import smtplib
+import ssl
 import uuid
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -31,7 +32,9 @@ def _send(settings: Settings, msg: EmailMessage) -> None:
     password = get_password(settings.keyring_service, settings.username)
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-            smtp.starttls()
+            # Verify the server's certificate and hostname before sending the password.
+            # Plain starttls() uses an unverified context.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.username, password)
             smtp.send_message(msg)
     except smtplib.SMTPAuthenticationError as exc:

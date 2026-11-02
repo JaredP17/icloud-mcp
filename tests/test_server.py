@@ -193,6 +193,30 @@ async def test_send_mail_accepted_sends(patched_clients_writable):
 
 
 @pytest.mark.anyio
+async def test_send_mail_timeout_warns_not_to_retry(patched_clients_writable, monkeypatch):
+    import time
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    def slow_send(settings, to, subject, body, cc=""):
+        time.sleep(0.5)
+        return "Sent."
+
+    monkeypatch.setattr(server, "_CALL_TIMEOUT", 0.05)
+    monkeypatch.setattr(server.write_ops, "send_message", slow_send)
+
+    async with create_connected_server_and_client_session(
+        server.mcp._mcp_server, elicitation_callback=_accept_cb("accept")
+    ) as client:
+        result = await client.call_tool(
+            "send_mail", {"to": "x@y.com", "subject": "Hi", "body": "yo"}
+        )
+        assert not result.isError
+        text = " ".join(str(c.text) for c in result.content)
+        assert "may still complete" in text and "Do not retry" in text
+
+
+@pytest.mark.anyio
 async def test_create_event_accepted_creates(patched_clients_writable):
     from mcp.shared.memory import create_connected_server_and_client_session
 
