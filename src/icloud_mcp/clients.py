@@ -6,6 +6,10 @@ reuses the connection across tool calls, rather than reconnecting every time.
 IMAP is opened read-only and message bodies are fetched with ``BODY.PEEK[]``
 (see ``mail.py``), so this client cannot mark messages read or mutate the
 mailbox — a structural guarantee for the read-only v1.
+
+Each client holds one connection that isn't thread-safe, so each carries a
+``lock``. The server holds it for a whole operation (e.g. select folder + fetch),
+so concurrent tool calls can't interleave commands on the same connection.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import html
 import imaplib
 import re
+import threading
 from urllib.parse import urljoin
 
 import caldav
@@ -20,6 +25,10 @@ import imapclient
 
 from .auth import get_password
 from .config import Settings
+
+# Per-socket-operation timeout (seconds) for IMAP and CalDAV/CardDAV, so a stalled
+# connection fails instead of holding a worker thread forever.
+NET_TIMEOUT = 20
 
 # Errors that indicate a dead/stale IMAP socket and warrant a single reconnect.
 _IMAP_CONN_ERRORS = (OSError, imaplib.IMAP4.error, imapclient.exceptions.IMAPClientError)
@@ -45,11 +54,14 @@ class MailClient:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._client: imapclient.IMAPClient | None = None
+        self.lock = threading.RLock()
 
     def connection(self) -> imapclient.IMAPClient:
         if self._client is None:
             s = self._settings
-            client = imapclient.IMAPClient(s.imap_host, ssl=True, port=s.imap_port, use_uid=True)
+            client = imapclient.IMAPClient(
+                s.imap_host, ssl=True, port=s.imap_port, use_uid=True, timeout=NET_TIMEOUT
+            )
             client.login(s.username, get_password(s.keyring_service, s.username))
             self._client = client
         return self._client
@@ -89,6 +101,7 @@ class ContactsClient:
         self._settings = settings
         self._dav: caldav.DAVClient | None = None
         self._addressbooks: list[str] | None = None
+        self.lock = threading.RLock()
 
     def _client(self) -> caldav.DAVClient:
         if self._dav is None:
@@ -97,6 +110,7 @@ class ContactsClient:
                 url=s.carddav_url,
                 username=s.username,
                 password=get_password(s.keyring_service, s.username),
+                timeout=NET_TIMEOUT,
             )
         return self._dav
 
@@ -201,6 +215,7 @@ class CalendarClient:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._principal = None
+        self.lock = threading.RLock()
 
     def principal(self):
         if self._principal is None:
@@ -209,6 +224,7 @@ class CalendarClient:
                 url=s.caldav_url,
                 username=s.username,
                 password=get_password(s.keyring_service, s.username),
+                timeout=NET_TIMEOUT,
             )
             self._principal = dav.principal()
         return self._principal

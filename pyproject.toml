@@ -7,13 +7,17 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "eodozzy" }]
 keywords = ["mcp", "icloud", "imap", "caldav", "model-context-protocol"]
+# Upper bounds at the majors the code is tested on. The unit tests use fakes for
+# these libraries, so a breaking major would pass CI and fail at runtime (as
+# mcp 2.x did); tests/test_deps.py checks the APIs we call on the real ones.
 dependencies = [
     "mcp[cli]>=1.10,<2",  # 2.x renamed FastMCP to MCPServer; port before lifting
-    "imapclient",
-    "caldav",
-    "vobject",
+    "imapclient>=3,<5",
+    "caldav>=1.4,<4",
+    "icalendar>=5,<8",  # imported directly by writes.py
+    "vobject>=0.9.7,<1",
     "keyring",
-    "pydantic",
+    "pydantic>=2,<3",
     "python-dotenv",
 ]
 

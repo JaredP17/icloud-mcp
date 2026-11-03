@@ -1,5 +1,7 @@
 """Unit tests for the mutating ops — SMTP send + CalDAV event creation. No network."""
 
+import ssl
+
 import pytest
 
 from icloud_mcp import writes
@@ -12,7 +14,6 @@ class _FakeSMTP:
 
     def __init__(self, host, port, timeout=None):
         self.host, self.port = host, port
-        self.started_tls = False
         self.tls_context = None
         self.logged_in = None
         self.sent = None
@@ -25,7 +26,6 @@ class _FakeSMTP:
         return False
 
     def starttls(self, context=None):
-        self.started_tls = True
         self.tls_context = context
 
     def login(self, user, password):
@@ -56,26 +56,17 @@ def test_send_message_builds_and_sends(monkeypatch):
         _settings(), to="you@example.com", subject="Hi", body="Hello there.", cc="c@example.com"
     )
     sent = _FakeSMTP.last
-    assert sent.started_tls and sent.logged_in == ("me@icloud.com", "app-pw")
+    # STARTTLS with a context that verifies the certificate and hostname.
+    assert sent.tls_context is not None
+    assert sent.tls_context.verify_mode == ssl.CERT_REQUIRED
+    assert sent.tls_context.check_hostname
+    assert sent.logged_in == ("me@icloud.com", "app-pw")
     assert sent.sent["To"] == "you@example.com"
     assert sent.sent["Cc"] == "c@example.com"
     assert sent.sent["From"] == "me@icloud.com"
     assert sent.sent["Subject"] == "Hi"
     assert sent.sent.get_content().strip() == "Hello there."
     assert result == "Sent to you@example.com."
-
-
-def test_send_message_verifies_tls_certificate(monkeypatch):
-    import ssl
-
-    monkeypatch.setattr(writes.smtplib, "SMTP", _FakeSMTP)
-    monkeypatch.setattr(writes, "get_password", lambda svc, user: "app-pw")
-
-    writes.send_message(_settings(), "you@example.com", "Hi", "Body")
-    ctx = _FakeSMTP.last.tls_context
-    assert ctx is not None
-    assert ctx.verify_mode == ssl.CERT_REQUIRED
-    assert ctx.check_hostname
 
 
 def test_send_message_auth_error_is_wrapped(monkeypatch):

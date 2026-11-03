@@ -8,12 +8,14 @@ block the asyncio event loop.
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+import logging
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from . import calendar as cal_ops
@@ -24,31 +26,70 @@ from .clients import CalendarClient, ContactsClient, MailClient
 from .config import Settings
 from .models import Calendar, Contact, Event, Folder, FullMessage, Message
 
+log = logging.getLogger(__name__)
+
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="icloud-io")
-_CALL_TIMEOUT = 30  # seconds
+_CALL_TIMEOUT = 30  # seconds, reads
+# Writes get longer than one SMTP send's worst case (connect, STARTTLS, login and
+# send at up to 20s each), so a slow but healthy send reports its real outcome.
+_WRITE_TIMEOUT = 120  # seconds
+
+
+def _call_locked(fn, *args):
+    """Run `fn` holding its client's lock (first arg), if it has one.
+
+    The shared IMAP/DAV connections aren't thread-safe, so the lock spans the
+    whole operation. SMTP sends take `Settings` and open their own connection.
+    """
+    lock = getattr(args[0], "lock", None) if args else None
+    with lock if lock is not None else nullcontext():
+        return fn(*args)
+
+
+def _submit(fn, *args) -> Future:
+    return _executor.submit(_call_locked, fn, *args)
 
 
 async def _run_blocking(fn, *args):
-    loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-        loop.run_in_executor(_executor, fn, *args), timeout=_CALL_TIMEOUT
-    )
+    return await asyncio.wait_for(asyncio.wrap_future(_submit(fn, *args)), _CALL_TIMEOUT)
+
+
+def _log_late_outcome(name: str):
+    """Log how a timed-out write eventually ended, since no caller is waiting."""
+
+    def done(fut: Future) -> None:
+        exc = fut.exception()
+        if exc is not None:
+            log.error("%s finished after timing out, and FAILED: %s", name, exc)
+        else:
+            log.warning("%s finished after timing out, and succeeded: %s", name, fut.result())
+
+    return done
 
 
 async def _run_write(fn, *args) -> str:
-    """Run a mutating op. On timeout, report that it may still finish.
+    """Run a mutating op. On timeout, say whether it might still go through.
 
-    wait_for stops waiting but can't stop the worker thread, so a timed-out send or
-    create may still go through. A plain error would invite a retry and a duplicate.
+    wait_for stops waiting but can't stop a worker thread that has started, so a
+    timed-out send or create may still happen. The error says so, to discourage a
+    retry that would duplicate it. A write that never left the queue is cancelled
+    and is safe to retry.
     """
+    fut = _submit(fn, *args)
     try:
-        return await _run_blocking(fn, *args)
+        return await asyncio.wait_for(asyncio.wrap_future(fut), _WRITE_TIMEOUT)
     except TimeoutError:
-        return (
-            f"Timed out after {_CALL_TIMEOUT}s, but the action may still complete. "
+        if fut.cancel():
+            raise ToolError(
+                f"Timed out after {_WRITE_TIMEOUT}s waiting to start; nothing was "
+                "changed. Safe to retry."
+            ) from None
+        fut.add_done_callback(_log_late_outcome(getattr(fn, "__name__", "write")))
+        raise ToolError(
+            f"Timed out after {_WRITE_TIMEOUT}s, but the action may still complete. "
             "Do not retry: check Sent mail, the calendar, or contacts first to see "
             "whether it went through."
-        )
+        ) from None
 
 
 @dataclass

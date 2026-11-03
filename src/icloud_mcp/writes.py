@@ -23,6 +23,11 @@ from .clients import CalendarClient, ContactsClient
 from .config import Settings
 
 
+# Verifies the server's certificate and hostname. Built once: loading the CA store
+# isn't free, and an SSLContext is safe to share across threads.
+_TLS_CONTEXT = ssl.create_default_context()
+
+
 class WriteError(RuntimeError):
     """A user-facing failure from a mutating operation (no credential leakage)."""
 
@@ -32,9 +37,9 @@ def _send(settings: Settings, msg: EmailMessage) -> None:
     password = get_password(settings.keyring_service, settings.username)
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-            # Verify the server's certificate and hostname before sending the password.
-            # Plain starttls() uses an unverified context.
-            smtp.starttls(context=ssl.create_default_context())
+            # Plain starttls() uses an unverified context; ours checks the cert
+            # before the password is sent.
+            smtp.starttls(context=_TLS_CONTEXT)
             smtp.login(settings.username, password)
             smtp.send_message(msg)
     except smtplib.SMTPAuthenticationError as exc:

@@ -44,27 +44,27 @@ capability), and the opt-in flag + confirmation guard every mutation.
 
 ## Install
 
+This is a fork of [eodozzy/icloud-mcp](https://github.com/eodozzy/icloud-mcp) with
+fixes not yet in the upstream PyPI release: SMTP certificate verification, safer
+write timeouts, thread-safe connections, and dependency version limits (the PyPI
+0.1.1 release pulls in `mcp` 2.x and fails on import). Install from this fork, not
+with `pip install icloud-mcp`:
+
 ```bash
-pip install icloud-mcp
+pip install git+https://github.com/JaredP17/icloud-mcp
 ```
 
 Or run it without installing — handy for MCP clients that launch the server
 on demand:
 
 ```bash
-uvx icloud-mcp
-```
-
-To install the latest unreleased code straight from GitHub:
-
-```bash
-pip install git+https://github.com/eodozzy/icloud-mcp
+uvx --from git+https://github.com/JaredP17/icloud-mcp icloud-mcp
 ```
 
 Or for local development:
 
 ```bash
-git clone git@github.com:eodozzy/icloud-mcp
+git clone https://github.com/JaredP17/icloud-mcp
 cd icloud-mcp
 python3 -m venv .venv && .venv/bin/pip install -e ".[test]"
 ```
